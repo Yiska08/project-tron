@@ -14,30 +14,30 @@ module clock(
     input      RESET,           // synchronous, active high (synchronize the button first)
     input      clk,             // 100 MHz master clock
     output reg pix_en,          // 25 MHz  -> VGA pixel enable
-    output reg spi_tick,        // 200 kHz -> SPI FSM toggles SCLK on each tick (100 kHz SCLK)
+    output reg jstk_clk      = 0,   // 66.67 kHz square wave -> Digilent PmodJSTK clock
     output reg seg_tick,        // 1 kHz   -> 7-seg display multiplexing/refresh
-    output reg debounce_tick    // 1 kHz   -> button/joystick debounce sampling
+    output reg debounce_tick,    // 1 kHz   -> button/joystick debounce sampling
+	output reg clk_5hz
 );
 
 
 // 25 MHz pixel enable
 reg [1:0] ctrp = 0;
-parameter dvp = 2'd4;
-//parameter dvp = 2'd4;         // same in simulation
+parameter dvp = 4;
+//parameter dvp = 3'd4;         // same in simulation
 
-// SPI tick (200 kHz -> 100 kHz SCLK)
-reg [8:0] ctrs = 0;
-parameter dvs = 9'd500;
-//parameter dvs = 9'd5;         // fast, for simulation
+//66.67 Khz
+reg [9:0] ctrs = 0;
+parameter dvs = 750;
 
 // 7-seg refresh (1 kHz)
 reg [16:0] ctrg = 0;
-parameter dvg = 17'd100_000;
+parameter dvg = 100_000;
 //parameter dvg = 17'd10;       // fast, for simulation
 
 // Debounce sampling (1 kHz)
 reg [16:0] ctrd = 0;
-parameter dvd = 17'd100_000;
+parameter dvd = 100_000;
 //parameter dvd = 17'd10;       // fast, for simulation
 
 
@@ -54,19 +54,48 @@ always @(posedge clk) begin
 		pix_en <= 0;
 	end
 end
+// Value to toggle output clock at
+	parameter cntEndVal = 24'h989680;
+	// Current count
+	reg [23:0] clkCount = 24'h000000;
+	
+	
+	//-------------------------------------------------
+	//	5Hz Clock Divider Generates Send/Receive signal
+	//-------------------------------------------------
+	always @(posedge clk) begin
+
+			// Reset clock
+			if(RESET == 1'b1) begin
+					clk_5hz <= 1'b0;
+					clkCount <= 24'h000000;
+			end
+			else begin
+
+					if(clkCount == cntEndVal) begin
+							clk_5hz <= ~clk_5hz;
+							clkCount <= 24'h000000;
+					end
+					else begin
+							clkCount <= clkCount + 1'b1;
+					end
+
+			end
+
+	end
 
 
-//100 MHz -> 200 kHz SPI tick
+
+//jstk_clk
 always @(posedge clk) begin
 	if (RESET) begin
 		ctrs     <= 0;
-		spi_tick <= 0;
+		jstk_clk <= 0;
 	end else if (ctrs == dvs - 1) begin
 		ctrs     <= 0;
-		spi_tick <= 1;
+		jstk_clk <= ~jstk_clk;
 	end else begin
 		ctrs     <= ctrs + 1;
-		spi_tick <= 0;
 	end
 end
 
