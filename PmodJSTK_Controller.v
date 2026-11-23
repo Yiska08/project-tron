@@ -8,28 +8,19 @@
 // Project Name: 	 PmodJSTK_Controller
 // Target Devices: Nexys3
 // Tool versions:  ISE 14.1
-// Description: This is a demo for the Digilent PmodJSTK. Data is sent and received
-//					 to and from the PmodJSTK at a frequency of 5Hz, and positional 
-//					 data is displayed on the seven segment display (SSD). The positional
+// Description: This is a demo for the Digilent PmodJSTK modified for Tron game use. Data is sent and received
+//					 to and from the PmodJSTK at a frequency of 100 Hz. The positional
 //					 data of the joystick ranges from 0 to 1023 in both the X and Y
-//					 directions. Only one coordinate can be displayed on the SSD at a
-//					 time, therefore switch SW0 is used to select which coordinate's data
-//	   			 to display. The status of the buttons on the PmodJSTK are
-//					 displayed on LD2, LD1, and LD0 on the Nexys3. The LEDs will
-//					 illuminate when a button is pressed. Switches SW2 and SW1 on the
-//					 Nexys3 will turn on LD1 and LD2 on the PmodJSTK respectively. Button
-//					 BTND on the Nexys3 is used for resetting the demo. The PmodJSTK
-//					 connects to pins [4:1] on port JA on the Nexys3. SPI mode 0 is used
-//					 for communication between the PmodJSTK and the Nexys3.
+//					 directions. There is then a joy_to_dir module that will apply dead zones and 
+//				     convert the joystick ranges to the actual directions used for the game.
 //
-//					 NOTE: The digits on the SSD may at times appear to flicker, this
-//						    is due to small pertebations in the positional data being read
-//							 by the PmodJSTK's ADC. To reduce the flicker simply reduce
-//							 the rate at which the data being displayed is updated.
+//				
+// dir: 00=Up 01=Right 10=Down 11=Left    valid=1 only when stick is pushed past dead zone
+// Valid bit: If direction is valid -> game should decide to switch if not game should do same direction
 //
 // Revision History: 
 // 						Revision 0.01 - File Created (Josh Sackos)
-//						Revision 0.02 - Renamed File and using the Demo for tron light cycle project
+//						Revision 0.02 - Renamed File and using the Demo for tron light cycle project (Chatwin Ho)
 //////////////////////////////////////////////////////////////////////////////////
 
 
@@ -38,36 +29,34 @@
 // ==============================================================================
 module PmodJSTK_Controller(
     CLK,
-	clk_5hz,
+	clk_poll,
 	jstk_clk,
     RST,
     MISO,
-	 SW,
     SS,
     MOSI,
     SCLK,
-    LED,
-	 AN,
-	 SEG
+	dir,
+	valid
     );
 
 	// ===========================================================================
 	// 										Port Declarations
 	// ===========================================================================
-			input clk_5hz;
+			input clk_poll;
 			input jstk_clk;
 			//Tron game Additions
 
 			input CLK;					// 100Mhz onboard clock
-			input RST;					// Button D
-			input MISO;					// Master In Slave Out, Pin 3, Port JA
-			input [2:0] SW;			// Switches 2, 1, and 0
-			output SS;					// Slave Select, Pin 1, Port JA
-			output MOSI;				// Master Out Slave In, Pin 2, Port JA
-			output SCLK;				// Serial Clock, Pin 4, Port JA
-			output [2:0] LED;			// LEDs 2, 1, and 0
-			output [3:0] AN;			// Anodes for Seven Segment Display
-			output [6:0] SEG;			// Cathodes for Seven Segment Display
+			input RST;					// RST
+			input MISO;					// Master In Slave Out, Dependent on player Pmod
+			output SS;					// Slave Select, 
+			output MOSI;				// Master Out Slave 
+			output SCLK;				// Serial Clock, 
+			//Added directional output
+			output [1:0] dir; //Direction of joystick
+			output valid; //give to game whether joystick command is valid. 
+
 
 	// ===========================================================================
 	// 							  Parameters, Regsiters, and Wires
@@ -75,23 +64,14 @@ module PmodJSTK_Controller(
 			wire SS;						// Active low
 			wire MOSI;					// Data transfer from master to slave
 			wire SCLK;					// Serial clock that controls communication
-			reg [2:0] LED;				// Status of PmodJSTK buttons displayed on LEDs
-			wire [3:0] AN;				// Anodes for Seven Segment Display
-			wire [6:0] SEG;			// Cathodes for Seven Segment Display
-
-			// Holds data to be sent to PmodJSTK
-			wire [7:0] sndData;
 
 			// Signal to send/receive data to/from PmodJSTK
 
-			wire sndRec = clk_5hz; // TRON Updated to receive clock from clock.v
+			wire sndRec = clk_poll; // TRON Updated to receive clock from clock.v
 
 			// Data read from PmodJSTK
 			wire [39:0] jstkData;
-
-			// Signal carrying output data that user selected
-			wire [9:0] posData;
-
+			wire [7:0]  sndData = 8'b1000_0000;   // first byte: joystick LEDs off
 	// ===========================================================================
 	// 										Implementation
 	// ===========================================================================
@@ -115,34 +95,12 @@ module PmodJSTK_Controller(
 			
 
 
-			//-----------------------------------------------
-			//  		Seven Segment Display Controller
-			//-----------------------------------------------
-			ssdCtrl DispCtrl(
-					.CLK(CLK),
-					.RST(RST),
-					.DIN(posData),
-					.AN(AN),
-					.SEG(SEG)
+			
+			joy_to_dir JoyCtrl(
+				.clk(CLK),
+				.jstkData(jstkData),
+				.dir(dir),
+		        .valid(valid)
 			);
-			
-			
-
-
-			// Use state of switch 0 to select output of X position or Y position data to SSD
-			assign posData = (SW[0] == 1'b1) ? {jstkData[9:8], jstkData[23:16]} : {jstkData[25:24], jstkData[39:32]};
-
-			// Data to be sent to PmodJSTK, lower two bits will turn on leds on PmodJSTK
-			assign sndData = {8'b100000, {SW[1], SW[2]}};
-
-			// Assign PmodJSTK button status to LED[2:0]
-			always @(sndRec or RST or jstkData) begin
-					if(RST == 1'b1) begin
-							LED <= 3'b000;
-					end
-					else begin
-							LED <= {jstkData[1], {jstkData[2], jstkData[0]}};
-					end
-			end
 
 endmodule

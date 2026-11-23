@@ -15,15 +15,22 @@ module top(
     end
     wire reset = rst_sync2;
 
+    reg jstk_clk;
+    reg clk_poll;
     // 2. Clock divider (100 MHz -> 25 MHz VGA enable ticks)
     wire pix_en, spi_tick, seg_tick, debounce_tick;
     clock tick_gen (
         .RESET         (reset),
         .clk           (clk),
         .pix_en        (pix_en),
-        .spi_tick      (spi_tick),
+        
         .seg_tick      (seg_tick),
-        .debounce_tick (debounce_tick)
+        .debounce_tick (debounce_tick),
+
+        //For jmodcontroller
+        .spi_tick      (spi_tick),
+        .jstk_clk(jstk_clk),
+        .clk_poll(clk_poll)
     );
 
     // 3. VGA timing controller

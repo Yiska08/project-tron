@@ -1,6 +1,6 @@
 // Clock Divider (tick generator)
 // Master Clock Input (100 MHz) --> Clock Module --> Output: pix_en       25 MHz  (VGA pixel enable)
-//                                                     -->   spi_tick    200 kHz  (SPI half-period -> 100 kHz SCLK)
+//                                                     -->   jstclk is now 66.67 KHZ
 //                                                     -->   seg_tick      1 kHz  (7-seg digit refresh)
 //                                                     -->   debounce_tick 1 kHz  (button/joystick sampling)
 //
@@ -17,7 +17,7 @@ module clock(
     output reg jstk_clk      = 0,   // 66.67 kHz square wave -> Digilent PmodJSTK clock
     output reg seg_tick,        // 1 kHz   -> 7-seg display multiplexing/refresh
     output reg debounce_tick,    // 1 kHz   -> button/joystick debounce sampling
-    output reg clk_5hz
+    output reg clk_poll 	= 0	// 100HZ for polling the joystick =0 for test bench purposes
 );
 
 
@@ -54,24 +54,24 @@ always @(posedge clk) begin
         pix_en <= 0;
     end
 end
-// Value to toggle output clock at
-    parameter cntEndVal = 24'h989680;
+// Value to toggle polling clk at 100hz
+    parameter cntEndVal = 24'h07A11F;      // 499,999
     // Current count
     reg [23:0] clkCount = 24'h000000;
     //-------------------------------------------------
-    //  5Hz Clock Divider Generates Send/Receive signal
+    //  100Hz Clock Divider Generates Send/Receive signal
     //-------------------------------------------------
     always @(posedge clk) begin
 
             // Reset clock
             if(RESET == 1'b1) begin
-                    clk_5hz <= 1'b0;
+                    clk_poll <= 1'b0;
                     clkCount <= 24'h000000;
             end
             else begin
 
                     if(clkCount == cntEndVal) begin
-                            clk_5hz <= ~clk_5hz;
+                            clk_poll <= ~clk_poll;
                             clkCount <= 24'h000000;
                     end
                     else begin
