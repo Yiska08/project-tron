@@ -2,8 +2,10 @@
 
 module top(
     input         clk,              // 100 MHz master clock
-    input         btnC,             // Center button (synchronous reset)
-    input  [15:0] sw,               // Switches (available for game speed / start / mode)
+    input         btnC,             // Center button: reset + new round
+    input         btnU, btnD, btnL, btnR,   // Direction buttons (stand-in for joystick)
+    input  [15:0] sw,               // Switches (unused for now)
+    output [15:0] led,              // led[0] = alive, led[1] = crashed
     output [3:0]  vgaRed, vgaGreen, vgaBlue,
     output        Hsync, Vsync
 );
@@ -15,10 +17,9 @@ module top(
     end
     wire reset = rst_sync2;
 
-    reg jstk_clk;
-    reg clk_poll;
+
     // 2. Clock divider (100 MHz -> 25 MHz VGA enable ticks)
-    wire pix_en, spi_tick, seg_tick, debounce_tick;
+    wire pix_en, jstk_clk, clk_poll, seg_tick, debounce_tick;
     clock tick_gen (
         .RESET         (reset),
         .clk           (clk),
@@ -28,7 +29,6 @@ module top(
         .debounce_tick (debounce_tick),
 
         //For jmodcontroller
-        .spi_tick      (spi_tick),
         .jstk_clk(jstk_clk),
         .clk_poll(clk_poll)
     );
@@ -50,81 +50,101 @@ module top(
     // 4. Screen coordinates -> 80x60 grid (8x8 pixel tiles)
     wire [9:0] x  = H_cnt - 10'd144;     // 0..639
     wire [9:0] y  = V_cnt - 10'd35;      // 0..479
-    wire [6:0] cx = x[9:3];              // 0..79 (80 columns)
-    wire [5:0] cy = y[8:3];              // 0..59 (60 rows)
-
+    wire [6:0] cx = x[9:3];              // 0..79
+    wire [5:0] cy = y[8:3];              // 0..59
     wire is_grid_line = (x[2:0] == 3'd0) || (y[2:0] == 3'd0);
-    wire is_border    = (cx <= 7'd1) || (cx >= 7'd78) || (cy <= 6'd1) || (cy >= 6'd58);
 
-    // 5. Temporary BRAM Scene Loader (sweeps 80x60 cells on startup/reset)
-        // Replace this block with your Tron game FSM once ready!
-        reg        init_done = 1'b0;
-        reg [6:0]  init_x    = 7'd0;
-        reg [5:0]  init_y    = 6'd0;
-        reg        game_we;
-        reg [1:0]  game_din;
-    
-        always @(posedge clk) begin
-            if (reset) begin
-                init_done <= 1'b0;
-                init_x    <= 7'd0;
-                init_y    <= 6'd0;
-            end else if (!init_done) begin
-                if (init_x == 7'd79) begin
-                    init_x <= 7'd0;
-                    if (init_y == 6'd59)
-                        init_done <= 1'b1;
-                    else
-                        init_y <= init_y + 6'd1;
-                end else begin
-                    init_x <= init_x + 7'd1;
-                end
-            end
-        end
-    
-        // Decide what sample pattern to write into each cell of BRAM
-        always @(*) begin
-            game_we = !init_done;
-            if (init_x <= 7'd1 || init_x >= 7'd78 || init_y <= 6'd1 || init_y >= 6'd58)
-                game_din = 2'b11;                                       // Gray border wall
-            else if ((init_y == 6'd30 && init_x >= 7'd15 && init_x <= 7'd25) ||
-                     (init_x == 7'd25 && init_y >= 6'd20 && init_y <= 6'd30))
-                game_din = 2'b01;                                       // Sample Cyan P1 trail
-            else if ((init_y == 6'd30 && init_x >= 7'd55 && init_x <= 7'd65) ||
-                     (init_x == 7'd55 && init_y >= 6'd30 && init_y <= 6'd40))
-                game_din = 2'b10;                                       // Sample Orange P2 trail
-            else
-                game_din = 2'b00;                                       // Empty grid cell
-        end
-    
-        // 6. Dual-Port Block RAM Framebuffer (80x60 = 4,800 cells)
-        wire [1:0] cell_state;
-        wire [1:0] unused_dout_a;
-    
-        grid_ram arena_ram (
-            .clk    (clk),
-            // Port A: Temporary Scene Loader (later: Tron Game FSM)
-            .we_a   (game_we),
-            .ax     (init_x),
-            .ay     (init_y),
-            .din_a  (game_din),
-            .dout_a (unused_dout_a),
-            // Port B: VGA Display Scan
-            .vx     (cx),
-            .vy     (cy),
-            .dout_b (cell_state)
-        );
-    
-        // 7. Tron Color Renderer (reads purely from BRAM dout_b)
-        reg [11:0] rgb;
-        always @(*) begin
-            case (cell_state)
-                2'b01:   rgb = 12'h0FF;                                 // Player 1 trail (Cyan)
-                2'b10:   rgb = 12'hF80;                                 // Player 2 trail (Orange)
-                2'b11:   rgb = 12'hAAA;                                 // Arena border/wall (Gray)
-                default: rgb = is_grid_line ? 12'h113 : 12'h001;        // Empty grid cell
-            endcase
-        end
-    
-        assign {vgaRed, vgaGreen, vgaBlue} = Vid_on ? rgb : 12'h000;
-    endmodule
+    // 5. Start a grid clear right after reset is released (1-clk pulse)
+    reg started;
+    always @(posedge clk) begin
+        if (reset) started <= 1'b0;
+        else       started <= 1'b1;
+    end
+    wire clear_start = !reset && !started;
+
+    // 6. grid_clear: writes border walls + empty interior
+    wire       clr_busy, clr_done, clr_we;
+    wire [6:0] clr_x;
+    wire [5:0] clr_y;
+    wire [1:0] clr_din;
+    grid_clear clr (
+        .clk   (clk),
+        .reset (reset),
+        .start (clear_start),
+        .busy  (clr_busy),
+        .done  (clr_done),
+        .we    (clr_we),
+        .x     (clr_x),
+        .y     (clr_y),
+        .din   (clr_din)
+    );
+
+    // 7. Buttons -> direction (later: replace with joystick module)
+    wire [1:0] dir;
+    wire       dir_valid;
+    btn_dir buttons (
+        .clk       (clk),
+        .btnU      (btnU),
+        .btnR      (btnR),
+        .btnD      (btnD),
+        .btnL      (btnL),
+        .dir       (dir),
+        .dir_valid (dir_valid)
+    );
+
+    // 8. move_fsm: one light cycle (Mode 1)
+    wire       mv_we, alive, crashed;
+    wire [6:0] mv_x;
+    wire [5:0] mv_y;
+    wire [1:0] mv_din;
+    wire [1:0] ram_dout_a;
+    move_fsm mover (
+        .clk       (clk),
+        .reset     (reset),
+        .go        (clr_done),
+        .dir_in    (dir),
+        .dir_valid (dir_valid),
+        .we        (mv_we),
+        .ax        (mv_x),
+        .ay        (mv_y),
+        .din       (mv_din),
+        .dout      (ram_dout_a),
+        .alive     (alive),
+        .crashed   (crashed)
+    );
+
+    // 9. Port A mux: grid_clear owns the RAM while clearing, move_fsm otherwise
+    wire       a_we  = clr_busy ? clr_we  : mv_we;
+    wire [6:0] a_x   = clr_busy ? clr_x   : mv_x;
+    wire [5:0] a_y   = clr_busy ? clr_y   : mv_y;
+    wire [1:0] a_din = clr_busy ? clr_din : mv_din;
+
+    // 10. Dual-port grid RAM (80x60 = 4,800 cells)
+    wire [1:0] cell_state;
+    grid_ram arena_ram (
+        .clk    (clk),
+        .we_a   (a_we),
+        .ax     (a_x),
+        .ay     (a_y),
+        .din_a  (a_din),
+        .dout_a (ram_dout_a),
+        .vx     (cx),
+        .vy     (cy),
+        .dout_b (cell_state)
+    );
+
+    // 11. Renderer: cell code -> color
+    reg [11:0] rgb;
+    always @(*) begin
+        case (cell_state)
+            2'b01:   rgb = 12'h0FF;                              // P1 trail (cyan)
+            2'b10:   rgb = 12'hF80;                              // P2 trail (orange)
+            2'b11:   rgb = crashed ? 12'hF00 : 12'hAAA;          // wall: gray, red after crash
+            default: rgb = is_grid_line ? 12'h113 : 12'h001;     // empty cell
+        endcase
+    end
+    assign {vgaRed, vgaGreen, vgaBlue} = Vid_on ? rgb : 12'h000;
+
+    // 12. Status LEDs
+    assign led = {14'd0, crashed, alive};
+endmodule
