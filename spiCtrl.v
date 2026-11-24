@@ -88,7 +88,7 @@ module spiCtrl(
 					getByte <= 1'b0;
 					sndData <= 8'h00;
 					tmpSR <= 40'h0000000000;
-					DOUT <= 40'h0000000000;
+					DOUT <= 40'h0002000200;
 					byteCnt <= 3'd0;
 					pState <= Idle;
 			end

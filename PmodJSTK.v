@@ -37,6 +37,7 @@ module PmodJSTK(
 // ===========================================================================
 // 										Port Declarations
 // ===========================================================================
+			input jst_clk;
 			input CLK;						// 100MHz onboard clock
 			input RST;						// Reset
 			input sndRec;					// Send receive, initializes data read/write
